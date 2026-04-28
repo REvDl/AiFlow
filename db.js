@@ -63,10 +63,19 @@ async function ensureSchema(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       url TEXT NOT NULL UNIQUE,
-      icon_url TEXT
+      icon_url TEXT,
+      is_pinned INTEGER NOT NULL DEFAULT 0
     )
   `.trim(),
   );
+
+  // Lightweight migration: older DBs may not have `is_pinned`.
+  // We add it in-place to keep existing user data.
+  const cols = await all(db, "PRAGMA table_info(models)");
+  const hasPinned = cols.some((c) => c && c.name === "is_pinned");
+  if (!hasPinned) {
+    await run(db, "ALTER TABLE models ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 async function seedDefaultsIfEmpty(db) {
@@ -74,7 +83,9 @@ async function seedDefaultsIfEmpty(db) {
   if ((row?.cnt ?? 0) > 0) return;
 
   const defaults = [
-    { name: "ChatGPT", url: "https://chat.openai.com/" },
+    // NOTE: chat.openai.com is frequently blocked/broken in embedded browsers.
+    // Use chatgpt.com as the default entrypoint.
+    { name: "ChatGPT", url: "https://chatgpt.com/" },
     { name: "DeepSeek", url: "https://chat.deepseek.com/" },
     { name: "Gemini", url: "https://gemini.google.com/" },
   ];
@@ -89,7 +100,10 @@ async function seedDefaultsIfEmpty(db) {
 }
 
 async function listModels(db) {
-  return await all(db, "SELECT id, name, url, icon_url FROM models ORDER BY id ASC");
+  return await all(
+    db,
+    "SELECT id, name, url, icon_url, is_pinned FROM models ORDER BY is_pinned DESC, id ASC",
+  );
 }
 
 async function addModel(db, { name, url }) {
@@ -109,14 +123,40 @@ async function addModel(db, { name, url }) {
 
   const { lastID } = await run(
     db,
-    "INSERT INTO models (name, url, icon_url) VALUES (?, ?, ?)",
+    "INSERT INTO models (name, url, icon_url, is_pinned) VALUES (?, ?, ?, 0)",
     [derivedName, trimmedUrl, buildFaviconUrl(trimmedUrl)],
   );
 
-  const inserted = await get(db, "SELECT id, name, url, icon_url FROM models WHERE id = ?", [
+  const inserted = await get(db, "SELECT id, name, url, icon_url, is_pinned FROM models WHERE id = ?", [
     lastID,
   ]);
   return inserted;
+}
+
+async function migrateChatGPTUrl(db) {
+  /**
+   * Migration:
+   * If user already has the old URL stored (https://chat.openai.com/),
+   * update it to https://chatgpt.com/ so <webview> can load it.
+   *
+   * Handle potential uniqueness conflict if user already added chatgpt.com manually.
+   */
+  const oldUrl = "https://chat.openai.com/";
+  const newUrl = "https://chatgpt.com/";
+
+  const existingNew = await get(db, "SELECT id FROM models WHERE url = ?", [newUrl]);
+  if (existingNew) {
+    // If new exists, remove the old record(s) to satisfy UNIQUE(url).
+    await run(db, "DELETE FROM models WHERE url = ?", [oldUrl]);
+    await run(db, "DELETE FROM models WHERE url LIKE ?", ["https://chat.openai.com/%"]);
+    return;
+  }
+
+  await run(
+    db,
+    "UPDATE models SET url = ?, icon_url = ? WHERE url = ? OR url LIKE ?",
+    [newUrl, buildFaviconUrl(newUrl), oldUrl, "https://chat.openai.com/%"],
+  );
 }
 
 /**
@@ -128,6 +168,7 @@ async function initDb({ userDataPath }) {
   const db = openDb(dbPath);
   await ensureSchema(db);
   await seedDefaultsIfEmpty(db);
+  await migrateChatGPTUrl(db);
   return { db, dbPath };
 }
 
