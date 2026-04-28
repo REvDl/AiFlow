@@ -14,5 +14,18 @@ contextBridge.exposeInMainWorld("AiFlow", {
     delete: (payload) => ipcRenderer.invoke("models:delete", payload),
     togglePin: (payload) => ipcRenderer.invoke("models:togglePin", payload),
   },
+  oauth: {
+    // Renderer -> Main
+    start: (payload) => ipcRenderer.invoke("oauth", payload),
+    // Backward compatibility with previous channel name.
+    startLegacy: (payload) => ipcRenderer.invoke("oauth:start", payload),
+    // Main -> Renderer
+    onOAuth: (handler) => {
+      ipcRenderer.on("oauth", (_event, data) => handler(data));
+    },
+    onAuth: (handler) => {
+      ipcRenderer.on("auth", (_event, data) => handler(data));
+    },
+  },
 });
 

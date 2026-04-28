@@ -15,6 +15,8 @@ const els = {
   sidebarToggle: document.getElementById("sidebarToggle"),
   sidebarToggleFloating: document.getElementById("sidebarToggleFloating"),
   list: document.getElementById("modelsList"),
+  loginBtn: document.getElementById("loginBtn"),
+  authState: document.getElementById("authState"),
   addForm: document.getElementById("addForm"),
   urlInput: document.getElementById("urlInput"),
   webviewHost: document.getElementById("webviewHost"),
@@ -25,11 +27,58 @@ const els = {
 let state = {
   models: [],
   activeId: null,
+  auth: {
+    isAuthenticated: false,
+    provider: null,
+    lastResult: null,
+  },
 };
 
 // Webview cache: keep created instances to allow instant switching.
 // Key: model.id (stable) -> { webview, modelId }
 const webviewCache = new Map();
+const OAUTH_DEFAULT_CONFIG = {
+  provider: "google",
+  authBaseUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+  clientId: "",
+  scope: ["openid", "email", "profile"],
+  responseType: "code",
+  extraParams: {
+    prompt: "consent",
+    access_type: "offline",
+  },
+};
+
+function renderAuthUi() {
+  const loggedIn = Boolean(state.auth.isAuthenticated);
+  if (els.loginBtn) {
+    els.loginBtn.style.display = loggedIn ? "none" : "";
+  }
+  if (els.authState) {
+    if (!loggedIn) {
+      els.authState.textContent = "Not logged in";
+      return;
+    }
+    const provider = state.auth.provider || "OAuth";
+    const authType = state.auth.lastResult?.code
+      ? "code"
+      : state.auth.lastResult?.token?.accessToken || state.auth.lastResult?.token?.idToken
+        ? "token"
+        : "callback";
+    els.authState.textContent = `Logged in via ${provider} (${authType})`;
+  }
+}
+
+function isLikelyOAuthUrl(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const path = (u.pathname || "").toLowerCase();
+    return host === "accounts.google.com" && (path.includes("/o/oauth2/") || path.includes("/signin/"));
+  } catch {
+    return false;
+  }
+}
 
 function safeUrl(url) {
   const raw = String(url || "").trim();
@@ -218,7 +267,69 @@ function createWebview({ url, domainKey }) {
     });
   });
 
+  // OAuth MUST NOT run inside <webview>. Intercept and delegate to main process.
+  webview.addEventListener("will-navigate", (e) => {
+    const target = e?.url;
+    if (!target) return;
+    if (!isLikelyOAuthUrl(target)) {
+      // eslint-disable-next-line no-console
+      console.log("[oauth][allow][will-navigate]", target);
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.log("[oauth][intercept][will-navigate]", target);
+    e.preventDefault();
+    window.AiFlow.oauth
+      .start({ url: target })
+      .then(() => {
+        els.hintText.textContent = "Login opened in your default browser.";
+      })
+      .catch((err) => {
+        els.hintText.textContent = `OAuth failed to start: ${err?.message || String(err)}`;
+      });
+  });
+
+  webview.addEventListener("new-window", (e) => {
+    const target = e?.url;
+    if (!target) return;
+    if (!isLikelyOAuthUrl(target)) {
+      // eslint-disable-next-line no-console
+      console.log("[oauth][allow][new-window]", target);
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.log("[oauth][intercept][new-window]", target);
+    e.preventDefault();
+    window.AiFlow.oauth
+      .start({ url: target })
+      .then(() => {
+        els.hintText.textContent = "Login opened in your default browser.";
+      })
+      .catch((err) => {
+        els.hintText.textContent = `OAuth failed to start: ${err?.message || String(err)}`;
+      });
+  });
+
   return webview;
+}
+
+async function startLogin() {
+  if (!window.AiFlow?.oauth?.start) {
+    els.hintText.textContent = "OAuth bridge is unavailable.";
+    return;
+  }
+
+  if (!OAUTH_DEFAULT_CONFIG.clientId) {
+    els.hintText.textContent = "Set OAuth clientId in renderer config before login.";
+    return;
+  }
+
+  try {
+    els.hintText.textContent = "Login opened in secure browser...";
+    await window.AiFlow.oauth.start(OAUTH_DEFAULT_CONFIG);
+  } catch (err) {
+    els.hintText.textContent = `OAuth failed to start: ${err?.message || String(err)}`;
+  }
 }
 
 function hideAllWebviews() {
@@ -296,6 +407,12 @@ els.addForm.addEventListener("submit", async (e) => {
   }
 });
 
+if (els.loginBtn) {
+  els.loginBtn.addEventListener("click", () => {
+    startLogin();
+  });
+}
+
 // Sidebar collapse/expand
 function toggleSidebar(force) {
   if (typeof force === "boolean") {
@@ -312,4 +429,43 @@ els.sidebarToggleFloating.addEventListener("click", () => toggleSidebar(false));
 refreshModels({ autoSelectFirst: true }).catch((err) => {
   els.hintText.textContent = `Failed to load models: ${err?.message || String(err)}`;
 });
+
+// OAuth progress event (main -> renderer)
+window.AiFlow.oauth.onOAuth((data) => {
+  const message = String(data?.message || "").trim();
+  if (message) {
+    els.hintText.textContent = message;
+  }
+});
+
+// OAuth result event (main -> renderer)
+window.AiFlow.oauth.onAuth((data) => {
+  // eslint-disable-next-line no-console
+  console.log("[auth] event received in renderer:", data);
+  state.auth.lastResult = data || null;
+  state.auth.provider = data?.provider || null;
+  state.auth.isAuthenticated = Boolean(
+    data?.ok && (data?.token?.code || data?.token?.accessToken || data?.token?.idToken || data?.code || data?.access_token || data?.id_token),
+  );
+  renderAuthUi();
+
+  if (!data?.ok) {
+    els.hintText.textContent = `Login failed: ${data?.error || "Unknown OAuth error"}`;
+    return;
+  }
+
+  if (data?.code) {
+    els.hintText.textContent = "Login successful. Authorization code received.";
+    return;
+  }
+
+  if (data?.access_token || data?.id_token) {
+    els.hintText.textContent = "Login successful. Token received.";
+    return;
+  }
+
+  els.hintText.textContent = "Login callback received.";
+});
+
+renderAuthUi();
 
