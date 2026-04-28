@@ -1,0 +1,242 @@
+:root {
+  --bg: #0b0f14;
+  --panel: #0f1621;
+  --panel-2: #0c121b;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: rgba(255, 255, 255, 0.9);
+  --muted: rgba(255, 255, 255, 0.62);
+  --muted-2: rgba(255, 255, 255, 0.45);
+  --accent: #4ea1ff;
+  --danger: #ff4e6a;
+  --radius: 12px;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+    "Segoe UI Emoji";
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  background: radial-gradient(1200px 800px at 35% 10%, rgba(78, 161, 255, 0.08), transparent 55%),
+    radial-gradient(1200px 800px at 60% 90%, rgba(255, 78, 106, 0.06), transparent 50%), var(--bg);
+  color: var(--text);
+}
+
+.app {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 340px 1fr;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+}
+
+.sidebar__header {
+  padding: 18px 18px 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(78, 161, 255, 0.9), rgba(255, 78, 106, 0.85));
+  box-shadow: 0 0 0 6px rgba(78, 161, 255, 0.08);
+}
+
+.brand__name {
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+
+.brand__sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sidebar__list {
+  padding: 10px;
+  overflow: auto;
+  flex: 1;
+}
+
+.model-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.model-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.model-item[aria-current="true"] {
+  background: rgba(78, 161, 255, 0.10);
+  border-color: rgba(78, 161, 255, 0.22);
+}
+
+.model-item__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.model-item__icon img {
+  width: 20px;
+  height: 20px;
+}
+
+.model-item__meta {
+  min-width: 0;
+}
+
+.model-item__name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-item__url {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar__footer {
+  padding: 14px 14px 16px 14px;
+  border-top: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.footer__title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.add-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+.add-form__input {
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(0, 0, 0, 0.20);
+  color: var(--text);
+  padding: 0 12px;
+  outline: none;
+}
+
+.add-form__input:focus {
+  border-color: rgba(78, 161, 255, 0.38);
+  box-shadow: 0 0 0 4px rgba(78, 161, 255, 0.10);
+}
+
+.add-form__btn {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.add-form__btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted-2);
+  line-height: 1.35;
+}
+
+.content {
+  position: relative;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.webview-host {
+  position: absolute;
+  inset: 0;
+}
+
+.content__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.empty__title {
+  font-size: 18px;
+  font-weight: 650;
+  color: rgba(255, 255, 255, 0.86);
+  text-align: center;
+}
+
+.empty__text {
+  margin-top: 6px;
+  font-size: 13px;
+  text-align: center;
+  color: var(--muted);
+}
+
+webview {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
