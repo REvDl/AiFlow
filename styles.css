@@ -20,12 +20,17 @@
 
 html,
 body {
-  height: 100%;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
 }
 
 body {
   margin: 0;
   font-family: var(--font);
+  display: flex;
+  width: 100%;
+  height: 100vh;
   background: radial-gradient(1200px 800px at 35% 10%, rgba(78, 161, 255, 0.08), transparent 55%),
     radial-gradient(1200px 800px at 60% 90%, rgba(255, 78, 106, 0.06), transparent 50%), var(--bg);
   color: var(--text);
@@ -33,20 +38,60 @@ body {
 
 .app {
   height: 100vh;
-  display: grid;
-  grid-template-columns: 340px 1fr;
+  display: flex;
+  width: 100%;
+  overflow: hidden;
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
+  width: 340px;
+  flex: 0 0 340px;
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  transition: width 180ms ease, transform 180ms ease, opacity 180ms ease;
+  will-change: transform, width, opacity;
+}
+
+.app.app--collapsed .sidebar {
+  width: 0;
+  flex-basis: 0;
+  transform: translateX(-340px);
+  opacity: 0;
+  border-right-color: transparent;
+}
+
+.sidebar__headerRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .sidebar__header {
   padding: 18px 18px 12px 18px;
   border-bottom: 1px solid var(--line);
+}
+
+.icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.icon-btn__glyph {
+  font-size: 16px;
+  line-height: 1;
 }
 
 .brand {
@@ -80,29 +125,40 @@ body {
   flex: 1;
 }
 
-.model-item {
+.model-row {
   width: 100%;
+  position: relative;
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 1fr auto;
   gap: 10px;
   align-items: center;
   padding: 10px 10px;
   border-radius: 12px;
   border: 1px solid transparent;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  text-align: left;
 }
 
-.model-item:hover {
+.model-row:hover {
   background: rgba(255, 255, 255, 0.03);
   border-color: rgba(255, 255, 255, 0.06);
 }
 
-.model-item[aria-current="true"] {
+.model-row[aria-current="true"] {
   background: rgba(78, 161, 255, 0.10);
   border-color: rgba(78, 161, 255, 0.22);
+}
+
+.model-main {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  align-items: center;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  border: 0;
+  padding: 0;
 }
 
 .model-item__icon {
@@ -140,6 +196,44 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.model-actions {
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transform: translateY(-1px);
+  transition: opacity 120ms ease;
+}
+
+.model-row:hover .model-actions {
+  opacity: 1;
+}
+
+.mini-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.mini-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mini-btn--danger:hover {
+  border-color: rgba(255, 78, 106, 0.35);
+}
+
+.pin-on {
+  background: rgba(78, 161, 255, 0.12);
+  border-color: rgba(78, 161, 255, 0.22);
 }
 
 .sidebar__footer {
@@ -201,13 +295,45 @@ body {
 
 .content {
   position: relative;
+  display: flex;
+  flex-grow: 1;
+  width: 100%;
   height: 100vh;
   overflow: hidden;
 }
 
-.webview-host {
+.floating-toggle {
   position: absolute;
-  inset: 0;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 22, 33, 0.78);
+  color: var(--text);
+  cursor: pointer;
+  display: none;
+  place-items: center;
+  backdrop-filter: blur(8px);
+}
+
+.floating-toggle:hover {
+  background: rgba(15, 22, 33, 0.88);
+}
+
+.app.app--collapsed .floating-toggle {
+  display: grid;
+}
+
+.webview-host {
+  flex: 1;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #1e1e1e; /* Dark placeholder to avoid white flash */
 }
 
 .content__empty {
@@ -234,9 +360,25 @@ body {
 }
 
 webview {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
-  border: 0;
-  background: #ffffff;
+  border: none;
+  outline: none;
+  margin: 0;
+  padding: 0;
+  background-color: #1e1e1e;
+  opacity: 0;
+  pointer-events: none; /* Hidden webviews must not capture clicks */
+  z-index: 0;
+  transition: opacity 110ms ease;
+}
+
+webview.active {
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 1;
 }
 

@@ -7,7 +7,7 @@
       http-equiv="Content-Security-Policy"
       content="
         default-src 'self';
-        img-src 'self' https://www.google.com data:;
+        img-src 'self' data: https: http:;
         style-src 'self' 'unsafe-inline';
         script-src 'self';
       "
@@ -16,14 +16,20 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app">
+    <div class="app" id="appRoot">
       <aside class="sidebar" aria-label="AI models">
         <div class="sidebar__header">
-          <div class="brand">
+          <div class="sidebar__headerRow">
+            <button class="icon-btn" id="sidebarToggle" type="button" aria-label="Toggle sidebar">
+              <!-- simple hamburger -->
+              <span class="icon-btn__glyph" aria-hidden="true">☰</span>
+            </button>
+            <div class="brand">
             <div class="brand__dot" aria-hidden="true"></div>
             <div class="brand__text">
               <div class="brand__name">AiFlow</div>
               <div class="brand__sub">Models</div>
+            </div>
             </div>
           </div>
         </div>
@@ -47,6 +53,16 @@
       </aside>
 
       <main class="content" aria-label="Webview area">
+        <!-- When sidebar is collapsed, this floating button brings it back -->
+        <button
+          class="floating-toggle"
+          id="sidebarToggleFloating"
+          type="button"
+          aria-label="Show sidebar"
+          title="Show sidebar"
+        >
+          <span class="icon-btn__glyph" aria-hidden="true">☰</span>
+        </button>
         <div class="content__empty" id="emptyState">
           <div class="empty__title">No model selected</div>
           <div class="empty__text">Select a model from the sidebar to start.</div>
