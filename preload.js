@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("AiFlow", {
   models: {
     list: () => ipcRenderer.invoke("models:list"),
     add: (payload) => ipcRenderer.invoke("models:add", payload),
+    delete: (payload) => ipcRenderer.invoke("models:delete", payload),
+    togglePin: (payload) => ipcRenderer.invoke("models:togglePin", payload),
   },
 });
 
