@@ -15,11 +15,24 @@ let mainWindow = null;
 let dbHandle = null;
 let oauthServer = null;
 let oauthServerPort = null;
+let googleBridgeWindow = null;
+const configuredUserAgentSessions = new WeakSet();
 
 const DEEP_LINK_PROTOCOL = "aiflow";
 const DEEP_LINK_REDIRECT_URI = `${DEEP_LINK_PROTOCOL}://auth/callback`;
+const OAUTH_LOOPBACK_PORT = 53682;
+/** Must exactly match redirect registered for your Google OAuth client (Web) or documented loopback (Desktop). */
+const OAUTH_FIXED_LOOPBACK_REDIRECT_URI = `http://127.0.0.1:${OAUTH_LOOPBACK_PORT}/callback`;
+/** All embedded Google-origin sites share one session so OAuth bridge + webviews align. */
+const GOOGLE_SERVICES_PARTITION = "persist:google-services";
 const pendingOAuthStates = new Map();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const WEBAUTHN_BLOCKED_FEATURES = "WebAuthentication,WebAuthnConditionalUI";
+
+// Prevent passkey/Windows Hello prompts in embedded auth pages (<webview> and renderer).
+app.commandLine.appendSwitch("disable-features", WEBAUTHN_BLOCKED_FEATURES);
+// eslint-disable-next-line no-console
+console.log("[auth] webauthn blocked or bypassed");
 
 /**
  * IMPORTANT:
@@ -32,6 +45,37 @@ function setSafeUserAgentFallback() {
   app.userAgentFallback =
     `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ` +
     `Chrome/${chromeVersion} Safari/537.36`;
+}
+
+function getChromeLikeUaMetadata() {
+  const fullChromeVersion = process.versions?.chrome || "124.0.0.0";
+  const majorVersion = String(fullChromeVersion).split(".")[0] || "124";
+  return {
+    userAgent:
+      `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ` +
+      `Chrome/${fullChromeVersion} Safari/537.36`,
+    secChUa: `"Not:A-Brand";v="99", "Google Chrome";v="${majorVersion}", "Chromium";v="${majorVersion}"`,
+    secChUaMobile: "?0",
+    secChUaPlatform: '"Windows"',
+  };
+}
+
+function enforceChromeLikeRequestHeaders(targetSession) {
+  if (!targetSession || configuredUserAgentSessions.has(targetSession)) return;
+  configuredUserAgentSessions.add(targetSession);
+
+  targetSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const nextHeaders = { ...(details.requestHeaders || {}) };
+    const uaMeta = getChromeLikeUaMetadata();
+
+    // Keep headers browser-like for providers that reject embedded auth flows.
+    nextHeaders["User-Agent"] = uaMeta.userAgent;
+    nextHeaders["sec-ch-ua"] = uaMeta.secChUa;
+    nextHeaders["sec-ch-ua-mobile"] = uaMeta.secChUaMobile;
+    nextHeaders["sec-ch-ua-platform"] = uaMeta.secChUaPlatform;
+
+    callback({ requestHeaders: nextHeaders });
+  });
 }
 
 function toPartitionId(domainOrName) {
@@ -47,9 +91,75 @@ function toPartitionId(domainOrName) {
 function extractDomain(url) {
   try {
     const u = new URL(url);
-    return u.hostname.replace(/^www\\./i, "").toLowerCase();
+    return u.hostname.replace(/^www\./i, "").toLowerCase();
   } catch {
     return "unknown";
+  }
+}
+
+function isGoogleServiceDomain(hostname) {
+  const h = String(hostname || "")
+    .toLowerCase()
+    .replace(/^www\./i, "");
+  if (!h) return false;
+  return (
+    h === "google.com" ||
+    h.endsWith(".google.com") ||
+    h === "googleusercontent.com" ||
+    h.endsWith(".googleusercontent.com") ||
+    h === "googleapis.com" ||
+    h.endsWith(".googleapis.com") ||
+    h === "gstatic.com" ||
+    h.endsWith(".gstatic.com")
+  );
+}
+
+function buildOAuthPendingEntry(provider, payload, isGoogleFlow) {
+  let syncWebSession = Boolean(isGoogleFlow);
+  if (typeof payload?.syncWebSession === "boolean") syncWebSession = payload.syncWebSession;
+  return { provider, createdAt: Date.now(), syncWebSession };
+}
+
+function openGoogleWebSessionBridgeWindow() {
+  /**
+   * System Chrome cannot expose Google cookies to Electron. After desktop OAuth succeeds,
+   * we open Google sign-in in an Electron BrowserWindow using the SAME session partition as
+   * <webview>s for *.google.com, so cookie-based Google web apps work inside AiFlow.
+   */
+  try {
+    if (googleBridgeWindow && !googleBridgeWindow.isDestroyed()) {
+      googleBridgeWindow.focus();
+      return;
+    }
+
+    googleBridgeWindow = new BrowserWindow({
+      width: 480,
+      height: 760,
+      parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+      autoHideMenuBar: true,
+      backgroundColor: "#ffffff",
+      title: "Google · link in-app session",
+      webPreferences: {
+        partition: GOOGLE_SERVICES_PARTITION,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+        disableBlinkFeatures: WEBAUTHN_BLOCKED_FEATURES,
+      },
+    });
+
+    googleBridgeWindow.once("closed", () => {
+      googleBridgeWindow = null;
+    });
+
+    googleBridgeWindow.webContents.once("did-finish-load", () => {
+      googleBridgeWindow?.setTitle("Google · AiFlow · sign in, then close this window");
+    });
+
+    googleBridgeWindow.loadURL("https://accounts.google.com/");
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[AiFlow] Google session bridge:", err?.message || err);
   }
 }
 
@@ -67,6 +177,9 @@ async function resetAllWebviewSessions() {
     for (const m of models) {
       const domain = extractDomain(m.url);
       partitions.add(`persist:${toPartitionId(domain)}`);
+      if (isGoogleServiceDomain(domain)) {
+        partitions.add(GOOGLE_SERVICES_PARTITION);
+      }
     }
 
     for (const p of partitions) {
@@ -170,6 +283,11 @@ function completeOAuthFromCallback(rawUrl, source) {
 
   const provider = flow?.provider || null;
   const ok = parsed.type !== "error";
+  const shouldBridgeGoogleCookies =
+    ok &&
+    provider === "google" &&
+    flow?.syncWebSession === true &&
+    parsed.type !== "unknown";
   const token = {
     code: parsed.code || null,
     accessToken: parsed.access_token || null,
@@ -192,8 +310,13 @@ function completeOAuthFromCallback(rawUrl, source) {
     user: null,
     session: sessionData,
     token,
+    googleWebSessionBridge: Boolean(shouldBridgeGoogleCookies),
     ...parsed,
   });
+
+  if (shouldBridgeGoogleCookies) {
+    queueMicrotask(() => openGoogleWebSessionBridgeWindow());
+  }
   return true;
 }
 
@@ -211,13 +334,42 @@ function parseAndHandleProtocolUrl(rawUrl) {
 
 async function ensureLocalhostCallbackServer() {
   if (oauthServer && oauthServerPort) {
-    return { port: oauthServerPort, redirectUri: `http://127.0.0.1:${oauthServerPort}/callback` };
+    return { port: OAUTH_LOOPBACK_PORT, redirectUri: OAUTH_FIXED_LOOPBACK_REDIRECT_URI };
   }
 
   await new Promise((resolve, reject) => {
     oauthServer = http.createServer((req, res) => {
       try {
         const reqUrl = new URL(req.url || "/", "http://127.0.0.1");
+        if (req.method === "POST" && reqUrl.pathname === "/token-report") {
+          let body = "";
+          req.on("data", (chunk) => {
+            body += String(chunk || "");
+            if (body.length > 100000) req.destroy();
+          });
+          req.on("end", () => {
+            try {
+              const parsedBody = JSON.parse(body || "{}");
+              const params = new URLSearchParams();
+              if (parsedBody.access_token) params.set("access_token", String(parsedBody.access_token));
+              if (parsedBody.id_token) params.set("id_token", String(parsedBody.id_token));
+              if (parsedBody.state) params.set("state", String(parsedBody.state));
+              if (parsedBody.error) params.set("error", String(parsedBody.error));
+
+              const syntheticUrl = `${OAUTH_FIXED_LOOPBACK_REDIRECT_URI}#${params.toString()}`;
+              completeOAuthFromCallback(syntheticUrl, "localhost-fragment");
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json; charset=utf-8");
+              res.end(JSON.stringify({ ok: true }));
+            } catch {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json; charset=utf-8");
+              res.end(JSON.stringify({ ok: false, error: "Invalid token report payload" }));
+            }
+          });
+          return;
+        }
+
         if (reqUrl.pathname !== "/callback") {
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -225,16 +377,51 @@ async function ensureLocalhostCallbackServer() {
           return;
         }
 
-        const fullCallbackUrl = `http://127.0.0.1:${oauthServerPort}${reqUrl.pathname}${reqUrl.search || ""}${reqUrl.hash || ""}`;
+        const fullCallbackUrl = `${OAUTH_FIXED_LOOPBACK_REDIRECT_URI}${reqUrl.search || ""}${reqUrl.hash || ""}`;
         const handled = completeOAuthFromCallback(fullCallbackUrl, "localhost");
 
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/html; charset=utf-8");
         res.end(
-          `<!doctype html><html><body style="font-family:sans-serif;padding:20px;">
-             <h3>${handled ? "Login completed" : "Login callback received"}</h3>
-             <p>You can return to AiFlow.</p>
-           </body></html>`,
+          `<!doctype html>
+<html>
+  <body style="font-family:sans-serif;padding:20px;line-height:1.45">
+    <h3 id="title">${handled ? "Login completed" : "Login callback received"}</h3>
+    <p id="description">You can return to AiFlow.</p>
+    <script>
+      (async function () {
+        const hash = String(location.hash || "").replace(/^#/, "");
+        if (!hash) {
+          setTimeout(() => window.close(), 300);
+          return;
+        }
+
+        try {
+          const params = new URLSearchParams(hash);
+          const payload = {
+            access_token: params.get("access_token"),
+            id_token: params.get("id_token"),
+            state: params.get("state"),
+            error: params.get("error") || params.get("error_description"),
+          };
+
+          await fetch("/token-report", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          document.getElementById("title").textContent = "Login completed";
+          document.getElementById("description").textContent = "Token delivered to AiFlow. You can close this tab.";
+          setTimeout(() => window.close(), 500);
+        } catch {
+          document.getElementById("title").textContent = "Login completed";
+          document.getElementById("description").textContent = "Please return to AiFlow manually.";
+        }
+      })();
+    </script>
+  </body>
+</html>`,
         );
       } catch {
         res.statusCode = 500;
@@ -243,8 +430,15 @@ async function ensureLocalhostCallbackServer() {
       }
     });
 
-    oauthServer.on("error", reject);
-    oauthServer.listen(0, "127.0.0.1", () => {
+    oauthServer.on("error", (err) => {
+      reject(
+        new Error(
+          `Failed to bind localhost callback server on 127.0.0.1:${OAUTH_LOOPBACK_PORT}. ` +
+            `Close the process using this port and try again. Original error: ${err?.message || err}`,
+        ),
+      );
+    });
+    oauthServer.listen(OAUTH_LOOPBACK_PORT, "127.0.0.1", () => {
       const address = oauthServer.address();
       if (!address || typeof address === "string") {
         return reject(new Error("Failed to bind localhost callback server."));
@@ -254,24 +448,33 @@ async function ensureLocalhostCallbackServer() {
     });
   });
 
-  return { port: oauthServerPort, redirectUri: `http://127.0.0.1:${oauthServerPort}/callback` };
+  return { port: OAUTH_LOOPBACK_PORT, redirectUri: OAUTH_FIXED_LOOPBACK_REDIRECT_URI };
 }
 
 async function startOAuthFlow(payload = {}) {
   const provider = String(payload.provider || "generic").trim();
   const protocolRegistered = registerDeepLinkProtocol();
-  const useLocalhostFallback = Boolean(payload.useLocalhostFallback || !protocolRegistered);
+  const providerHint = `${provider} ${String(payload.authBaseUrl || "")} ${String(payload.url || "")}`.toLowerCase();
+  const isGoogleFlow = /google|accounts\.google\.com/.test(providerHint);
+  /** Normalize so Google URLs from webviews still get cookie bridge + pending state. */
+  const oauthProvider = isGoogleFlow ? "google" : provider;
+  const useLocalhostFallback = Boolean(
+    payload.useLocalhostFallback || isGoogleFlow || !protocolRegistered || process.defaultApp,
+  );
 
   let redirectUri = DEEP_LINK_REDIRECT_URI;
   if (useLocalhostFallback) {
-    const local = await ensureLocalhostCallbackServer();
-    redirectUri = local.redirectUri;
+    await ensureLocalhostCallbackServer();
+    redirectUri = OAUTH_FIXED_LOOPBACK_REDIRECT_URI;
   }
 
   let authUrlString = String(payload.url || "").trim();
+  let ensuredState = null;
   if (!authUrlString) {
     const authBaseUrl = String(payload.authBaseUrl || "").trim();
     if (!authBaseUrl) throw new Error("OAuth authBaseUrl is required.");
+    const clientId = String(payload.clientId || "").trim();
+    if (!clientId) throw new Error("OAuth clientId is required.");
 
     const parsedBase = new URL(authBaseUrl);
     if (parsedBase.protocol !== "https:" && parsedBase.protocol !== "http:") {
@@ -279,10 +482,11 @@ async function startOAuthFlow(payload = {}) {
     }
 
     const state = String(payload.state || randomState());
+    ensuredState = state;
     const scope = parseScope(payload.scope);
-    pendingOAuthStates.set(state, { provider, createdAt: Date.now() });
+    pendingOAuthStates.set(state, buildOAuthPendingEntry(oauthProvider, payload, isGoogleFlow));
 
-    parsedBase.searchParams.set("client_id", String(payload.clientId || "").trim());
+    parsedBase.searchParams.set("client_id", clientId);
     parsedBase.searchParams.set("redirect_uri", String(payload.redirectUri || redirectUri));
     parsedBase.searchParams.set("response_type", String(payload.responseType || "code"));
     parsedBase.searchParams.set("state", state);
@@ -301,23 +505,48 @@ async function startOAuthFlow(payload = {}) {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error("Only http(s) OAuth URLs are allowed.");
   }
+  // Some providers pass a fully-built authorize URL from the web app.
+  // Ensure callback params are still bound to this app so the flow can complete.
+  const looksLikeOAuth =
+    /oauth|authorize|signin|login|accounts\.google\.com/i.test(authUrlString) ||
+    parsed.searchParams.has("client_id") ||
+    parsed.searchParams.has("response_type") ||
+    parsed.searchParams.has("scope");
+  if (looksLikeOAuth) {
+    const preserveRedirectUri = Boolean(payload.preserveRedirectUri);
+    if (!parsed.searchParams.get("client_id")) {
+      const fallbackClientId = String(payload.clientId || "").trim();
+      if (fallbackClientId) parsed.searchParams.set("client_id", fallbackClientId);
+    }
+    if (!preserveRedirectUri) {
+      parsed.searchParams.set("redirect_uri", String(payload.redirectUri || redirectUri));
+    }
+    const stateParam = String(parsed.searchParams.get("state") || payload.state || randomState());
+    parsed.searchParams.set("state", stateParam);
+    ensuredState = stateParam;
+    pendingOAuthStates.set(stateParam, buildOAuthPendingEntry(oauthProvider, payload, isGoogleFlow));
+  }
+  const url = parsed.toString();
 
   sendOAuthEvent({
     stage: "opening-browser",
     message: "Login opened in secure browser...",
-    provider,
+    provider: oauthProvider,
     redirectUri,
     callbackMode: useLocalhostFallback ? "localhost" : "deep-link",
   });
 
-  await shell.openExternal(parsed.toString());
+  // eslint-disable-next-line no-console
+  console.log('Final Auth URL:', url);
+  await shell.openExternal(url);
 
   return {
     ok: true,
-    provider,
+    provider: oauthProvider,
+    state: ensuredState,
     redirectUri,
     callbackMode: useLocalhostFallback ? "localhost" : "deep-link",
-    authUrl: parsed.toString(),
+    authUrl: url,
   };
 }
 
@@ -363,6 +592,10 @@ function registerIpcHandlers() {
   ipcMain.handle("oauth", async (_event, payload) => await startOAuthFlow(payload || {}));
   // Backward compatibility with previous renderer API.
   ipcMain.handle("oauth:start", async (_event, payload) => await startOAuthFlow(payload || {}));
+  ipcMain.handle("google:openWebSessionBridge", () => {
+    openGoogleWebSessionBridgeWindow();
+    return { ok: true };
+  });
 }
 
 async function createMainWindow() {
@@ -379,6 +612,7 @@ async function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      disableBlinkFeatures: WEBAUTHN_BLOCKED_FEATURES,
 
       // Required by your spec: enable <webview>.
       webviewTag: true,
@@ -396,6 +630,10 @@ if (!hasSingleInstanceLock) {
 } else {
   app.whenReady().then(async () => {
     setSafeUserAgentFallback();
+    enforceChromeLikeRequestHeaders(session.defaultSession);
+    app.on("session-created", (createdSession) => {
+      enforceChromeLikeRequestHeaders(createdSession);
+    });
     registerDeepLinkProtocol();
 
     const initialProtocolUrl = getProtocolUrlFromArgv(process.argv);

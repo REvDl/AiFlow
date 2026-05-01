@@ -28,53 +28,77 @@ let state = {
   models: [],
   activeId: null,
   auth: {
-    isAuthenticated: false,
     provider: null,
-    lastResult: null,
   },
 };
+
+function handleAuthSuccess(data) {
+  if (data?.ok === true || data?.event === "auth:success") {
+    state.auth.isAuthenticated = true;
+
+    console.log("[auth FINAL STATE]", state.auth.isAuthenticated);
+
+    renderAuthUi();
+  }
+}
+
 
 // Webview cache: keep created instances to allow instant switching.
 // Key: model.id (stable) -> { webview, modelId }
 const webviewCache = new Map();
-const OAUTH_DEFAULT_CONFIG = {
-  provider: "google",
-  authBaseUrl: "https://accounts.google.com/o/oauth2/v2/auth",
-  clientId: "",
-  scope: ["openid", "email", "profile"],
-  responseType: "code",
-  extraParams: {
-    prompt: "consent",
-    access_type: "offline",
-  },
-};
+
+function buildGoogleOAuthPayload() {
+  const clientId = String(window.AiFlow?.env?.googleOAuthClientId || "").trim();
+  return {
+    provider: "google",
+    authBaseUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    clientId,
+    scope: ["openid", "email", "profile"],
+    responseType: "code",
+    /** After OAuth in the system browser, open in-app Google sign-in for shared cookies with webviews. */
+    syncWebSession: true,
+    extraParams: {
+      prompt: "consent",
+      access_type: "offline",
+    },
+  };
+}
 
 function renderAuthUi() {
-  const loggedIn = Boolean(state.auth.isAuthenticated);
+  const loggedIn = state.auth.isAuthenticated;
+
   if (els.loginBtn) {
     els.loginBtn.style.display = loggedIn ? "none" : "";
   }
+
   if (els.authState) {
     if (!loggedIn) {
       els.authState.textContent = "Not logged in";
       return;
     }
+
     const provider = state.auth.provider || "OAuth";
     const authType = state.auth.lastResult?.code
       ? "code"
       : state.auth.lastResult?.token?.accessToken || state.auth.lastResult?.token?.idToken
         ? "token"
         : "callback";
+
     els.authState.textContent = `Logged in via ${provider} (${authType})`;
   }
 }
 
 function isLikelyOAuthUrl(url) {
   try {
-    const u = new URL(url);
-    const host = u.hostname.toLowerCase();
-    const path = (u.pathname || "").toLowerCase();
-    return host === "accounts.google.com" && (path.includes("/o/oauth2/") || path.includes("/signin/"));
+    const value = String(url || "").toLowerCase();
+    return (
+      value.includes("accounts.google.com") ||
+      value.includes("oauth") ||
+      value.includes("signin") ||
+      value.includes("servicelogin") ||
+      value.includes("v3/signin") ||
+      value.includes("gsi")
+    );
   } catch {
     return false;
   }
@@ -83,9 +107,9 @@ function isLikelyOAuthUrl(url) {
 function safeUrl(url) {
   const raw = String(url || "").trim();
   if (!raw) return null;
+
   try {
     const u = new URL(raw);
-    // For simplicity and safety, keep to http(s).
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
     return u.toString();
   } catch {
@@ -94,9 +118,9 @@ function safeUrl(url) {
 }
 
 function normalizeUrlForCompare(url) {
-  // Avoid accidental reloads from minor formatting differences (trailing slash, etc.).
   const s = String(url || "").trim();
   if (!s) return "";
+
   try {
     const u = new URL(s);
     if (u.protocol !== "http:" && u.protocol !== "https:") return "";
@@ -115,9 +139,35 @@ function extractDomain(url) {
   }
 }
 
+function isGoogleServiceHost(hostname) {
+  const h = String(hostname || "")
+    .toLowerCase()
+    .replace(/^www\./i, "");
+  if (!h) return false;
+  return (
+    h === "google.com" ||
+    h.endsWith(".google.com") ||
+    h === "googleusercontent.com" ||
+    h.endsWith(".googleusercontent.com") ||
+    h === "googleapis.com" ||
+    h.endsWith(".googleapis.com") ||
+    h === "gstatic.com" ||
+    h.endsWith(".gstatic.com")
+  );
+}
+
+/** Persist key for Electron session.partition — must align with GOOGLE_SERVICES_PARTITION in main. */
+function storagePartitionKeyForUrl(url) {
+  const domain = extractDomain(url);
+  return isGoogleServiceHost(domain) ? "google-services" : domain;
+}
+
+function expectedWebviewPartitionForUrl(url) {
+  const key = storagePartitionKeyForUrl(url);
+  return `persist:${toPartitionId(key)}`;
+}
+
 function toPartitionId(domainOrName) {
-  // Critical: ensure partition is stable and safe.
-  // Example: "chat.openai.com" -> "chat-openai-com"
   return String(domainOrName || "unknown")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -127,15 +177,12 @@ function toPartitionId(domainOrName) {
 
 function faviconUrl(model) {
   const domain = extractDomain(model?.url || "");
-  // DuckDuckGo icons API (more permissive for embeds than Google in practice).
-  // Example: https://icons.duckduckgo.com/ip3/openai.com.ico
   return `https://icons.duckduckgo.com/ip3/${encodeURIComponent(domain)}.ico`;
 }
 
 function renderModels() {
   els.list.innerHTML = "";
 
-  // Sort: pinned first, then by id (stable).
   const sorted = [...state.models].sort((a, b) => {
     const ap = Number(a.is_pinned) ? 1 : 0;
     const bp = Number(b.is_pinned) ? 1 : 0;
@@ -151,26 +198,32 @@ function renderModels() {
 
     const icon = document.createElement("div");
     icon.className = "model-item__icon";
+
     const img = document.createElement("img");
     img.alt = "";
     img.referrerPolicy = "no-referrer";
     img.src = faviconUrl(m);
+
     icon.appendChild(img);
 
     const meta = document.createElement("div");
     meta.className = "model-item__meta";
+
     const name = document.createElement("div");
     name.className = "model-item__name";
     name.textContent = m.name + (Number(m.is_pinned) ? " · Pinned" : "");
+
     const url = document.createElement("div");
     url.className = "model-item__url";
     url.textContent = m.url;
+
     meta.appendChild(name);
     meta.appendChild(url);
 
     const mainBtn = document.createElement("button");
     mainBtn.className = "model-main";
     mainBtn.type = "button";
+
     mainBtn.appendChild(icon);
     mainBtn.appendChild(meta);
 
@@ -184,49 +237,46 @@ function renderModels() {
     const pinBtn = document.createElement("button");
     pinBtn.className = `mini-btn ${Number(m.is_pinned) ? "pin-on" : ""}`;
     pinBtn.type = "button";
-    pinBtn.title = Number(m.is_pinned) ? "Unpin" : "Pin";
-    pinBtn.setAttribute("aria-label", pinBtn.title);
     pinBtn.textContent = "📌";
+
     pinBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      try {
-        const updated = await window.AiFlow.models.togglePin({ id: m.id });
-        // Update local state with returned row.
-        state.models = state.models.map((x) => (x.id === updated.id ? updated : x));
-        renderModels();
-      } catch (err) {
-        els.hintText.textContent = `Failed to toggle pin: ${err?.message || String(err)}`;
-      }
+
+      const updated = await window.AiFlow.models.togglePin({ id: m.id });
+
+      state.models = state.models.map((x) =>
+        x.id === updated.id ? updated : x
+      );
+
+      renderModels();
     });
 
     const delBtn = document.createElement("button");
     delBtn.className = "mini-btn mini-btn--danger";
     delBtn.type = "button";
-    delBtn.title = "Delete";
-    delBtn.setAttribute("aria-label", "Delete");
     delBtn.textContent = "🗑";
+
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      try {
-        await window.AiFlow.models.delete({ id: m.id });
-        // Remove cached webview too (to free memory).
-        const cached = webviewCache.get(m.id);
-        if (cached?.webview && cached.webview.isConnected) {
-          cached.webview.remove();
-        }
-        webviewCache.delete(m.id);
 
-        // Refresh DB-driven list (ensures consistency).
-        const wasActive = state.activeId === m.id;
-        await refreshModels();
-        if (wasActive) {
-          state.activeId = null;
-          els.emptyState.style.display = "grid";
-          els.hintText.textContent = "Model deleted.";
-          hideAllWebviews();
-        }
-      } catch (err) {
-        els.hintText.textContent = `Failed to delete model: ${err?.message || String(err)}`;
+      await window.AiFlow.models.delete({ id: m.id });
+
+      const cached = webviewCache.get(m.id);
+      if (cached?.webview && cached.webview.isConnected) {
+        cached.webview.remove();
+      }
+
+      webviewCache.delete(m.id);
+
+      const wasActive = state.activeId === m.id;
+
+      await refreshModels();
+
+      if (wasActive) {
+        state.activeId = null;
+        els.emptyState.style.display = "grid";
+        els.hintText.textContent = "Model deleted.";
+        hideAllWebviews();
       }
     });
 
@@ -235,101 +285,46 @@ function renderModels() {
 
     row.appendChild(mainBtn);
     row.appendChild(actions);
+
     els.list.appendChild(row);
   }
 }
 
-function createWebview({ url, domainKey }) {
+function createWebview({ url, partitionKey }) {
   const webview = document.createElement("webview");
+
   webview.setAttribute("src", url);
-  webview.setAttribute("partition", `persist:${toPartitionId(domainKey)}`);
+  webview.setAttribute("partition", `persist:${toPartitionId(partitionKey)}`);
   webview.setAttribute("allowpopups", "true");
-  // Force a Chrome-like UA at element level (some services are strict in embedded contexts).
   webview.setAttribute("useragent", CHROME_UA);
 
-  // Set Chrome UA to reduce site blocks on embedded webviews.
   webview.addEventListener("dom-ready", () => {
     try {
       webview.setUserAgent(CHROME_UA);
-    } catch {
-      // Some Electron versions may not expose setUserAgent on the element; ignore silently.
-    }
+    } catch {}
   });
 
-  // Visibility/debug: report failed loads in DevTools console.
   webview.addEventListener("did-fail-load", (e) => {
-    // eslint-disable-next-line no-console
-    console.error("[webview] did-fail-load", {
-      errorCode: e?.errorCode,
-      errorDescription: e?.errorDescription,
-      validatedURL: e?.validatedURL,
-      isMainFrame: e?.isMainFrame,
-    });
+    console.error("[webview] did-fail-load", e);
   });
 
-  // OAuth MUST NOT run inside <webview>. Intercept and delegate to main process.
   webview.addEventListener("will-navigate", (e) => {
-    const target = e?.url;
-    if (!target) return;
-    if (!isLikelyOAuthUrl(target)) {
-      // eslint-disable-next-line no-console
-      console.log("[oauth][allow][will-navigate]", target);
+    if (isLikelyOAuthUrl(e.url)) {
+      e.preventDefault();
+      window.AiFlow.oauth.start({ url: e.url });
       return;
     }
-    // eslint-disable-next-line no-console
-    console.log("[oauth][intercept][will-navigate]", target);
-    e.preventDefault();
-    window.AiFlow.oauth
-      .start({ url: target })
-      .then(() => {
-        els.hintText.textContent = "Login opened in your default browser.";
-      })
-      .catch((err) => {
-        els.hintText.textContent = `OAuth failed to start: ${err?.message || String(err)}`;
-      });
   });
 
   webview.addEventListener("new-window", (e) => {
-    const target = e?.url;
-    if (!target) return;
-    if (!isLikelyOAuthUrl(target)) {
-      // eslint-disable-next-line no-console
-      console.log("[oauth][allow][new-window]", target);
+    if (isLikelyOAuthUrl(e.url)) {
+      e.preventDefault();
+      window.AiFlow.oauth.start({ url: e.url });
       return;
     }
-    // eslint-disable-next-line no-console
-    console.log("[oauth][intercept][new-window]", target);
-    e.preventDefault();
-    window.AiFlow.oauth
-      .start({ url: target })
-      .then(() => {
-        els.hintText.textContent = "Login opened in your default browser.";
-      })
-      .catch((err) => {
-        els.hintText.textContent = `OAuth failed to start: ${err?.message || String(err)}`;
-      });
   });
 
   return webview;
-}
-
-async function startLogin() {
-  if (!window.AiFlow?.oauth?.start) {
-    els.hintText.textContent = "OAuth bridge is unavailable.";
-    return;
-  }
-
-  if (!OAUTH_DEFAULT_CONFIG.clientId) {
-    els.hintText.textContent = "Set OAuth clientId in renderer config before login.";
-    return;
-  }
-
-  try {
-    els.hintText.textContent = "Login opened in secure browser...";
-    await window.AiFlow.oauth.start(OAUTH_DEFAULT_CONFIG);
-  } catch (err) {
-    els.hintText.textContent = `OAuth failed to start: ${err?.message || String(err)}`;
-  }
 }
 
 function hideAllWebviews() {
@@ -342,31 +337,37 @@ function mountWebviewForModel(model) {
   const url = safeUrl(model.url);
   if (!url) return;
 
-  // Critical isolation rule:
-  // Each model gets its own persistent partition based on its domain,
-  // so cookies/sessions do not overlap across different AI sites.
-  const domain = extractDomain(url);
+  const partitionKey = storagePartitionKeyForUrl(url);
+  const expectedPartition = expectedWebviewPartitionForUrl(url);
 
-  // Instant switching:
-  // - Do NOT delete existing <webview>s
-  // - Keep them cached and only toggle visibility
   let cached = webviewCache.get(model.id);
+
+  if (cached?.webview?.getAttribute("partition") !== expectedPartition) {
+    if (cached?.webview?.isConnected) cached.webview.remove();
+    webviewCache.delete(model.id);
+    cached = null;
+  }
+
   if (!cached) {
-    const wv = createWebview({ url, domainKey: domain });
+    const wv = createWebview({ url, partitionKey });
+
     els.webviewHost.appendChild(wv);
+
     cached = { webview: wv, modelId: model.id };
+
     webviewCache.set(model.id, cached);
   } else {
-    // If URL changed for an existing model, update src (partition stays the same for its domain).
-    const current = normalizeUrlForCompare(cached.webview.getAttribute("src"));
+    const current = normalizeUrlForCompare(
+      cached.webview.getAttribute("src")
+    );
     const next = normalizeUrlForCompare(url);
+
     if (current && next && current !== next) {
       cached.webview.setAttribute("src", url);
     }
   }
 
   hideAllWebviews();
-  // Avoid white flash: keep webviews mounted, toggle visibility via CSS class.
   cached.webview.classList.add("active");
 
   els.emptyState.style.display = "none";
@@ -376,6 +377,7 @@ function mountWebviewForModel(model) {
 function setActiveModel(id) {
   state.activeId = id;
   renderModels();
+
   const m = state.models.find((x) => x.id === id);
   if (m) mountWebviewForModel(m);
 }
@@ -391,81 +393,57 @@ async function refreshModels({ autoSelectFirst = false } = {}) {
 
 els.addForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+
   const url = safeUrl(els.urlInput.value);
+
   if (!url) {
     els.hintText.textContent = "Please enter a valid http(s) URL.";
     return;
   }
 
-  try {
-    const inserted = await window.AiFlow.models.add({ url });
-    els.urlInput.value = "";
-    await refreshModels();
-    setActiveModel(inserted.id);
-  } catch (err) {
-    els.hintText.textContent = `Failed to add model: ${err?.message || String(err)}`;
-  }
+  const inserted = await window.AiFlow.models.add({ url });
+
+  els.urlInput.value = "";
+
+  await refreshModels();
+  setActiveModel(inserted.id);
 });
 
-if (els.loginBtn) {
-  els.loginBtn.addEventListener("click", () => {
-    startLogin();
-  });
-}
-
-// Sidebar collapse/expand
-function toggleSidebar(force) {
-  if (typeof force === "boolean") {
-    els.appRoot.classList.toggle("app--collapsed", force);
-  } else {
-    els.appRoot.classList.toggle("app--collapsed");
+els.loginBtn?.addEventListener("click", () => {
+  const oauthPayload = buildGoogleOAuthPayload();
+  if (!oauthPayload.clientId) {
+    els.hintText.textContent =
+      "Set environment variable GOOGLE_OAUTH_CLIENT_ID and restart AiFlow.";
+    return;
   }
-}
-
-els.sidebarToggle.addEventListener("click", () => toggleSidebar());
-els.sidebarToggleFloating.addEventListener("click", () => toggleSidebar(false));
-
-// Boot
-refreshModels({ autoSelectFirst: true }).catch((err) => {
-  els.hintText.textContent = `Failed to load models: ${err?.message || String(err)}`;
+  window.AiFlow.oauth.start(oauthPayload);
 });
 
-// OAuth progress event (main -> renderer)
-window.AiFlow.oauth.onOAuth((data) => {
-  const message = String(data?.message || "").trim();
-  if (message) {
-    els.hintText.textContent = message;
-  }
-});
+refreshModels({ autoSelectFirst: true });
 
-// OAuth result event (main -> renderer)
 window.AiFlow.oauth.onAuth((data) => {
-  // eslint-disable-next-line no-console
-  console.log("[auth] event received in renderer:", data);
   state.auth.lastResult = data || null;
   state.auth.provider = data?.provider || null;
-  state.auth.isAuthenticated = Boolean(
-    data?.ok && (data?.token?.code || data?.token?.accessToken || data?.token?.idToken || data?.code || data?.access_token || data?.id_token),
-  );
+
+  const success =
+    data?.ok ||
+    data?.event === "auth:success" ||
+    !!data?.code ||
+    !!data?.access_token ||
+    !!data?.id_token;
+
+  if (success) state.auth.isAuthenticated = true;
+
   renderAuthUi();
 
-  if (!data?.ok) {
-    els.hintText.textContent = `Login failed: ${data?.error || "Unknown OAuth error"}`;
-    return;
+  if (success && data?.googleWebSessionBridge) {
+    els.hintText.textContent =
+      "OAuth OK — finish Google sign-in in the extra window so in-app Google tabs reuse that session.";
+  } else if (success) {
+    els.hintText.textContent = "Login successful";
+  } else {
+    els.hintText.textContent = "Login failed";
   }
-
-  if (data?.code) {
-    els.hintText.textContent = "Login successful. Authorization code received.";
-    return;
-  }
-
-  if (data?.access_token || data?.id_token) {
-    els.hintText.textContent = "Login successful. Token received.";
-    return;
-  }
-
-  els.hintText.textContent = "Login callback received.";
 });
 
 renderAuthUi();
-
