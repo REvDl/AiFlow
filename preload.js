@@ -9,10 +9,10 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("AiFlow", {
   env: {
-    /** Set GOOGLE_OAUTH_CLIENT_ID in the environment before starting Electron (never commit real values). */
-    googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID || "",
+    googleOAuthClientId: "1065561839685-vqn3c7k9h4f268o33pq02hhn9kbjrf1t.apps.googleusercontent.com",
   },
   models: {
+    list: () => ipcRenderer.invoke("models:list"),
     list: () => ipcRenderer.invoke("models:list"),
     add: (payload) => ipcRenderer.invoke("models:add", payload),
     delete: (payload) => ipcRenderer.invoke("models:delete", payload),
