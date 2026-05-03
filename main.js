@@ -66,13 +66,23 @@ function enforceChromeLikeRequestHeaders(targetSession) {
 
   targetSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const nextHeaders = { ...(details.requestHeaders || {}) };
-    const uaMeta = getChromeLikeUaMetadata();
 
-    // Keep headers browser-like for providers that reject embedded auth flows.
-    nextHeaders["User-Agent"] = uaMeta.userAgent;
-    nextHeaders["sec-ch-ua"] = uaMeta.secChUa;
-    nextHeaders["sec-ch-ua-mobile"] = uaMeta.secChUaMobile;
-    nextHeaders["sec-ch-ua-platform"] = uaMeta.secChUaPlatform;
+    // СЕКРЕТНОЕ ОРУЖИЕ: Если стучимся в Гугл, маскируемся под чистый Firefox
+    if (details.url.includes("google.com") || details.url.includes("googleapis.com") || details.url.includes("gstatic.com")) {
+      const firefoxUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0";
+      nextHeaders["User-Agent"] = firefoxUA;
+      // ОБЯЗАТЕЛЬНО удаляем следы Chrome, иначе Гугл спалит подмену
+      delete nextHeaders["sec-ch-ua"];
+      delete nextHeaders["sec-ch-ua-mobile"];
+      delete nextHeaders["sec-ch-ua-platform"];
+    } else {
+      // Для остальных сайтов (ChatGPT, DeepSeek) оставляем Chrome
+      const uaMeta = getChromeLikeUaMetadata();
+      nextHeaders["User-Agent"] = uaMeta.userAgent;
+      nextHeaders["sec-ch-ua"] = uaMeta.secChUa;
+      nextHeaders["sec-ch-ua-mobile"] = uaMeta.secChUaMobile;
+      nextHeaders["sec-ch-ua-platform"] = uaMeta.secChUaPlatform;
+    }
 
     callback({ requestHeaders: nextHeaders });
   });
@@ -121,16 +131,13 @@ function buildOAuthPendingEntry(provider, payload, isGoogleFlow) {
 }
 
 function openGoogleWebSessionBridgeWindow() {
-  /**
-   * System Chrome cannot expose Google cookies to Electron. After desktop OAuth succeeds,
-   * we open Google sign-in in an Electron BrowserWindow using the SAME session partition as
-   * <webview>s for *.google.com, so cookie-based Google web apps work inside AiFlow.
-   */
   try {
     if (googleBridgeWindow && !googleBridgeWindow.isDestroyed()) {
       googleBridgeWindow.focus();
       return;
     }
+
+    const firefoxUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0";
 
     googleBridgeWindow = new BrowserWindow({
       width: 480,
@@ -138,28 +145,27 @@ function openGoogleWebSessionBridgeWindow() {
       parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
       autoHideMenuBar: true,
       backgroundColor: "#ffffff",
-      title: "Google · link in-app session",
+      title: "Google · AiFlow",
       webPreferences: {
         partition: GOOGLE_SERVICES_PARTITION,
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
-        disableBlinkFeatures: WEBAUTHN_BLOCKED_FEATURES,
+        sandbox: true, // Песочница обязательна
       },
     });
+
+    // Применяем UA Firefox к самому окну
+    googleBridgeWindow.webContents.userAgent = firefoxUA;
 
     googleBridgeWindow.once("closed", () => {
       googleBridgeWindow = null;
     });
 
-    googleBridgeWindow.webContents.once("did-finish-load", () => {
-      googleBridgeWindow?.setTitle("Google · AiFlow · sign in, then close this window");
-    });
+    // Грузим страницу
+    googleBridgeWindow.loadURL("https://accounts.google.com/", { userAgent: firefoxUA });
 
-    googleBridgeWindow.loadURL("https://accounts.google.com/");
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn("[AiFlow] Google session bridge:", err?.message || err);
+    console.warn("[AiFlow] Google session bridge error:", err?.message || err);
   }
 }
 
@@ -673,4 +679,3 @@ app.on("open-url", (event, url) => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
-
