@@ -7,7 +7,6 @@
  * - Enforce per-domain persistent partition isolation
  */
 
-// Use the current UA (main process sets app.userAgentFallback to a safe Chrome-like UA).
 const CHROME_UA = navigator.userAgent;
 
 const els = {
@@ -35,16 +34,11 @@ let state = {
 function handleAuthSuccess(data) {
   if (data?.ok === true || data?.event === "auth:success") {
     state.auth.isAuthenticated = true;
-
     console.log("[auth FINAL STATE]", state.auth.isAuthenticated);
-
     renderAuthUi();
   }
 }
 
-
-// Webview cache: keep created instances to allow instant switching.
-// Key: model.id (stable) -> { webview, modelId }
 const webviewCache = new Map();
 
 function buildGoogleOAuthPayload() {
@@ -55,7 +49,6 @@ function buildGoogleOAuthPayload() {
     clientId,
     scope: ["openid", "email", "profile"],
     responseType: "code",
-    /** After OAuth in the system browser, open in-app Google sign-in for shared cookies with webviews. */
     syncWebSession: true,
     extraParams: {
       prompt: "consent",
@@ -85,22 +78,6 @@ function renderAuthUi() {
         : "callback";
 
     els.authState.textContent = `Logged in via ${provider} (${authType})`;
-  }
-}
-
-function isLikelyOAuthUrl(url) {
-  try {
-    const value = String(url || "").toLowerCase();
-    return (
-      value.includes("accounts.google.com") ||
-      value.includes("oauth") ||
-      value.includes("signin") ||
-      value.includes("servicelogin") ||
-      value.includes("v3/signin") ||
-      value.includes("gsi")
-    );
-  } catch {
-    return false;
   }
 }
 
@@ -156,7 +133,6 @@ function isGoogleServiceHost(hostname) {
   );
 }
 
-/** Persist key for Electron session.partition — must align with GOOGLE_SERVICES_PARTITION in main. */
 function storagePartitionKeyForUrl(url) {
   const domain = extractDomain(url);
   return isGoogleServiceHost(domain) ? "google-services" : domain;
@@ -290,6 +266,7 @@ function renderModels() {
   }
 }
 
+// === ОЧИЩЕННЫЙ WEBVIEW ===
 function createWebview({ url, partitionKey }) {
   const webview = document.createElement("webview");
 
@@ -298,30 +275,8 @@ function createWebview({ url, partitionKey }) {
   webview.setAttribute("allowpopups", "true");
   webview.setAttribute("useragent", CHROME_UA);
 
-  webview.addEventListener("dom-ready", () => {
-    try {
-      webview.setUserAgent(CHROME_UA);
-    } catch {}
-  });
-
   webview.addEventListener("did-fail-load", (e) => {
     console.error("[webview] did-fail-load", e);
-  });
-
-  webview.addEventListener("will-navigate", (e) => {
-    if (isLikelyOAuthUrl(e.url)) {
-      e.preventDefault();
-      window.AiFlow.oauth.start({ url: e.url });
-      return;
-    }
-  });
-
-  webview.addEventListener("new-window", (e) => {
-    if (isLikelyOAuthUrl(e.url)) {
-      e.preventDefault();
-      window.AiFlow.oauth.start({ url: e.url });
-      return;
-    }
   });
 
   return webview;
@@ -390,6 +345,16 @@ async function refreshModels({ autoSelectFirst = false } = {}) {
     setActiveModel(state.models[0].id);
   }
 }
+
+els.sidebarToggle?.addEventListener("click", () => {
+  if (!els.appRoot) return;
+  els.appRoot.classList.toggle("app--collapsed");
+});
+
+els.sidebarToggleFloating?.addEventListener("click", () => {
+  if (!els.appRoot) return;
+  els.appRoot.classList.toggle("app--collapsed");
+});
 
 els.addForm.addEventListener("submit", async (e) => {
   e.preventDefault();
