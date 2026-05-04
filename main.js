@@ -4,13 +4,6 @@ const crypto = require("crypto");
 const { app, BrowserWindow, ipcMain, session, shell } = require("electron");
 const { initDb, listModels, addModel } = require("./db");
 
-/**
- * Main Process entry.
- * - Creates BrowserWindow with <webview> support
- * - Initializes SQLite and seeds default models
- * - Registers IPC handlers for renderer <-> DB communication
- */
-
 let mainWindow = null;
 let dbHandle = null;
 let oauthServer = null;
@@ -21,25 +14,15 @@ const configuredUserAgentSessions = new WeakSet();
 const DEEP_LINK_PROTOCOL = "aiflow";
 const DEEP_LINK_REDIRECT_URI = `${DEEP_LINK_PROTOCOL}://auth/callback`;
 const OAUTH_LOOPBACK_PORT = 53682;
-/** Must exactly match redirect registered for your Google OAuth client (Web) or documented loopback (Desktop). */
 const OAUTH_FIXED_LOOPBACK_REDIRECT_URI = `http://127.0.0.1:${OAUTH_LOOPBACK_PORT}/callback`;
-/** All embedded Google-origin sites share one session so OAuth bridge + webviews align. */
 const GOOGLE_SERVICES_PARTITION = "persist:google-services";
 const pendingOAuthStates = new Map();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const WEBAUTHN_BLOCKED_FEATURES = "WebAuthentication,WebAuthnConditionalUI";
 
-// Prevent passkey/Windows Hello prompts in embedded auth pages (<webview> and renderer).
 app.commandLine.appendSwitch("disable-features", WEBAUTHN_BLOCKED_FEATURES);
-// eslint-disable-next-line no-console
 console.log("[auth] webauthn blocked or bypassed");
 
-/**
- * IMPORTANT:
- * Some providers block sign-in in Electron/embedded browsers if the UA looks suspicious
- * (e.g., old Chrome versions or explicit "Electron/xx" tokens).
- * We set a global Chrome-like UA based on Electron's bundled Chromium.
- */
 function setSafeUserAgentFallback() {
   const chromeVersion = process.versions?.chrome || "124.0.0.0";
   app.userAgentFallback =
@@ -67,16 +50,13 @@ function enforceChromeLikeRequestHeaders(targetSession) {
   targetSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const nextHeaders = { ...(details.requestHeaders || {}) };
 
-    // СЕКРЕТНОЕ ОРУЖИЕ: Если стучимся в Гугл, маскируемся под чистый Firefox
     if (details.url.includes("google.com") || details.url.includes("googleapis.com") || details.url.includes("gstatic.com")) {
       const firefoxUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0";
       nextHeaders["User-Agent"] = firefoxUA;
-      // ОБЯЗАТЕЛЬНО удаляем следы Chrome, иначе Гугл спалит подмену
       delete nextHeaders["sec-ch-ua"];
       delete nextHeaders["sec-ch-ua-mobile"];
       delete nextHeaders["sec-ch-ua-platform"];
     } else {
-      // Для остальных сайтов (ChatGPT, DeepSeek) оставляем Chrome
       const uaMeta = getChromeLikeUaMetadata();
       nextHeaders["User-Agent"] = uaMeta.userAgent;
       nextHeaders["sec-ch-ua"] = uaMeta.secChUa;
@@ -150,18 +130,16 @@ function openGoogleWebSessionBridgeWindow() {
         partition: GOOGLE_SERVICES_PARTITION,
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true, // Песочница обязательна
+        sandbox: true, 
       },
     });
 
-    // Применяем UA Firefox к самому окну
     googleBridgeWindow.webContents.userAgent = firefoxUA;
 
     googleBridgeWindow.once("closed", () => {
       googleBridgeWindow = null;
     });
 
-    // Грузим страницу
     googleBridgeWindow.loadURL("https://accounts.google.com/", { userAgent: firefoxUA });
 
   } catch (err) {
@@ -170,13 +148,6 @@ function openGoogleWebSessionBridgeWindow() {
 }
 
 async function resetAllWebviewSessions() {
-  /**
-   * Session reset (requested):
-   * Clears cache/storage for all persistent partitions used by models.
-   *
-   * Note: This will log you out of sites in those partitions.
-   * It is intended as a recovery/diagnostic tool, not a permanent solution.
-   */
   try {
     const models = await listModels(dbHandle.db);
     const partitions = new Set();
@@ -194,7 +165,6 @@ async function resetAllWebviewSessions() {
       await s.clearStorageData();
     }
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.warn("[AiFlow] Failed to reset sessions:", err?.message || err);
   }
 }
@@ -462,7 +432,6 @@ async function startOAuthFlow(payload = {}) {
   const protocolRegistered = registerDeepLinkProtocol();
   const providerHint = `${provider} ${String(payload.authBaseUrl || "")} ${String(payload.url || "")}`.toLowerCase();
   const isGoogleFlow = /google|accounts\.google\.com/.test(providerHint);
-  /** Normalize so Google URLs from webviews still get cookie bridge + pending state. */
   const oauthProvider = isGoogleFlow ? "google" : provider;
   const useLocalhostFallback = Boolean(
     payload.useLocalhostFallback || isGoogleFlow || !protocolRegistered || process.defaultApp,
@@ -511,8 +480,6 @@ async function startOAuthFlow(payload = {}) {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error("Only http(s) OAuth URLs are allowed.");
   }
-  // Some providers pass a fully-built authorize URL from the web app.
-  // Ensure callback params are still bound to this app so the flow can complete.
   const looksLikeOAuth =
     /oauth|authorize|signin|login|accounts\.google\.com/i.test(authUrlString) ||
     parsed.searchParams.has("client_id") ||
@@ -542,7 +509,6 @@ async function startOAuthFlow(payload = {}) {
     callbackMode: useLocalhostFallback ? "localhost" : "deep-link",
   });
 
-  // eslint-disable-next-line no-console
   console.log('Final Auth URL:', url);
   await shell.openExternal(url);
 
@@ -565,7 +531,6 @@ function registerIpcHandlers() {
     return await addModel(dbHandle.db, payload || {});
   });
 
-  // Deletes a model by id.
   ipcMain.handle("models:delete", async (_event, { id }) => {
     const modelId = Number(id);
     if (!Number.isFinite(modelId)) throw new Error("Invalid id.");
@@ -573,7 +538,6 @@ function registerIpcHandlers() {
     return { ok: true };
   });
 
-  // Toggles pinned flag for a model and returns updated row.
   ipcMain.handle("models:togglePin", async (_event, { id }) => {
     const modelId = Number(id);
     if (!Number.isFinite(modelId)) throw new Error("Invalid id.");
@@ -590,13 +554,7 @@ function registerIpcHandlers() {
     return updated;
   });
 
-  /**
-   * OAuth flow entrypoint.
-   * Renderer must NOT run OAuth inside <webview>.
-   * Open auth URL in the system default browser.
-   */
   ipcMain.handle("oauth", async (_event, payload) => await startOAuthFlow(payload || {}));
-  // Backward compatibility with previous renderer API.
   ipcMain.handle("oauth:start", async (_event, payload) => await startOAuthFlow(payload || {}));
   ipcMain.handle("google:openWebSessionBridge", () => {
     openGoogleWebSessionBridgeWindow();
@@ -611,7 +569,6 @@ async function createMainWindow() {
     minWidth: 980,
     minHeight: 640,
     backgroundColor: "#0b0f14",
-    // Hide the default Windows menu bar (File/Edit/View...).
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -619,16 +576,11 @@ async function createMainWindow() {
       nodeIntegration: false,
       sandbox: false,
       disableBlinkFeatures: WEBAUTHN_BLOCKED_FEATURES,
-
-      // Required by your spec: enable <webview>.
       webviewTag: true,
     },
   });
 
   await mainWindow.loadFile(path.join(__dirname, "index.html"));
-
-  // Optional: keep it clean for a strict UI.
-  // mainWindow.removeMenu();
 }
 
 if (!hasSingleInstanceLock) {
@@ -640,6 +592,34 @@ if (!hasSingleInstanceLock) {
     app.on("session-created", (createdSession) => {
       enforceChromeLikeRequestHeaders(createdSession);
     });
+
+    // === ТА САМАЯ ЗАПЛАТКА: Синхронизируем JS и Сеть для всплывающих окон ===
+    app.on("web-contents-created", (event, contents) => {
+      // Разрешаем попапам открываться нормально
+      contents.setWindowOpenHandler(() => {
+        return { action: "allow" };
+      });
+
+      const firefoxUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0";
+
+      // Если вкладка рождает попап для Гугла - даем его JS-движку Firefox UA
+      contents.on("did-create-window", (window, details) => {
+        if (details.url.includes("google.com") || details.url.includes("oauth")) {
+          window.webContents.userAgent = firefoxUA;
+        }
+      });
+
+      // Если вкладка сама перенаправляется на Гугл - меняем UA на лету
+      contents.on("will-navigate", (e, url) => {
+        if (url.includes("google.com") || url.includes("oauth")) {
+          contents.userAgent = firefoxUA;
+        } else {
+          contents.userAgent = app.userAgentFallback; // Возвращаем Chrome для других сайтов
+        }
+      });
+    });
+    // =========================================================================
+
     registerDeepLinkProtocol();
 
     const initialProtocolUrl = getProtocolUrlFromArgv(process.argv);
