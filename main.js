@@ -147,6 +147,12 @@ function openGoogleWebSessionBridgeWindow() {
   }
 }
 
+async function logoutGoogleWebSession() {
+  const googleSession = session.fromPartition(GOOGLE_SERVICES_PARTITION);
+  await googleSession.clearStorageData();
+  await googleSession.clearCache();
+}
+
 async function resetAllWebviewSessions() {
   try {
     const models = await listModels(dbHandle.db);
@@ -556,6 +562,16 @@ function registerIpcHandlers() {
 
   ipcMain.handle("oauth", async (_event, payload) => await startOAuthFlow(payload || {}));
   ipcMain.handle("oauth:start", async (_event, payload) => await startOAuthFlow(payload || {}));
+  ipcMain.handle("oauth:logout", async () => {
+    await logoutGoogleWebSession();
+    sendAuthEvent({
+      ok: true,
+      event: "auth:logout",
+      provider: "google",
+      message: "Logged out from Google web session",
+    });
+    return { ok: true };
+  });
   ipcMain.handle("google:openWebSessionBridge", () => {
     openGoogleWebSessionBridgeWindow();
     return { ok: true };
@@ -630,7 +646,7 @@ if (!hasSingleInstanceLock) {
     }
 
     dbHandle = await initDb({ userDataPath: app.getPath("userData") });
-    await resetAllWebviewSessions();
+    //await resetAllWebviewSessions();
     registerIpcHandlers();
     await createMainWindow();
 
