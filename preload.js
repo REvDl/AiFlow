@@ -1,4 +1,6 @@
+const path = require("path");
 const { contextBridge, ipcRenderer } = require("electron");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 /**
  * Preload (runs in isolated context).
@@ -9,7 +11,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("AiFlow", {
   env: {
-    googleOAuthClientId: "1065561839685-vqn3c7k9h4f268o33pq02hhn9kbjrf1t.apps.googleusercontent.com",
+    googleOAuthClientId: String(process.env.GOOGLE_OAUTH_CLIENT_ID || "").trim(),
   },
   models: {
     list: () => ipcRenderer.invoke("models:list"),
@@ -21,6 +23,7 @@ contextBridge.exposeInMainWorld("AiFlow", {
   oauth: {
     // Renderer -> Main
     start: (payload) => ipcRenderer.invoke("oauth:start", payload),
+    logout: () => ipcRenderer.invoke("oauth:logout"),
     // Backward compatibility with previous channel name.
     startLegacy: (payload) => ipcRenderer.invoke("oauth", payload),
     // Main -> Renderer

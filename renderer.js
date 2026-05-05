@@ -15,6 +15,7 @@ const els = {
   sidebarToggleFloating: document.getElementById("sidebarToggleFloating"),
   list: document.getElementById("modelsList"),
   loginBtn: document.getElementById("loginBtn"),
+  logoutBtn: document.getElementById("logoutBtn"),
   authState: document.getElementById("authState"),
   addForm: document.getElementById("addForm"),
   urlInput: document.getElementById("urlInput"),
@@ -62,6 +63,9 @@ function renderAuthUi() {
 
   if (els.loginBtn) {
     els.loginBtn.style.display = loggedIn ? "none" : "";
+  }
+  if (els.logoutBtn) {
+    els.logoutBtn.style.display = loggedIn ? "" : "none";
   }
 
   if (els.authState) {
@@ -384,12 +388,26 @@ els.loginBtn?.addEventListener("click", () => {
   window.AiFlow.oauth.start(oauthPayload);
 });
 
+els.logoutBtn?.addEventListener("click", async () => {
+  try {
+    await window.AiFlow.oauth.logout();
+    state.auth.isAuthenticated = false;
+    state.auth.provider = null;
+    state.auth.lastResult = null;
+    renderAuthUi();
+    els.hintText.textContent = "Logged out";
+  } catch {
+    els.hintText.textContent = "Logout failed";
+  }
+});
+
 refreshModels({ autoSelectFirst: true });
 
 window.AiFlow.oauth.onAuth((data) => {
   state.auth.lastResult = data || null;
   state.auth.provider = data?.provider || null;
 
+  const isLogout = data?.event === "auth:logout";
   const success =
     data?.ok ||
     data?.event === "auth:success" ||
@@ -397,11 +415,19 @@ window.AiFlow.oauth.onAuth((data) => {
     !!data?.access_token ||
     !!data?.id_token;
 
-  if (success) state.auth.isAuthenticated = true;
+  if (isLogout) {
+    state.auth.isAuthenticated = false;
+    state.auth.provider = null;
+    state.auth.lastResult = null;
+  } else if (success) {
+    state.auth.isAuthenticated = true;
+  }
 
   renderAuthUi();
 
-  if (success && data?.googleWebSessionBridge) {
+  if (isLogout) {
+    els.hintText.textContent = "Logged out";
+  } else if (success && data?.googleWebSessionBridge) {
     els.hintText.textContent =
       "OAuth OK — finish Google sign-in in the extra window so in-app Google tabs reuse that session.";
   } else if (success) {
