@@ -1,6 +1,8 @@
 const path = require("path");
+const fs = require("fs");
 const http = require("http");
 const crypto = require("crypto");
+const dotenv = require("dotenv");
 const { app, BrowserWindow, ipcMain, session, shell } = require("electron");
 const { initDb, listModels, addModel } = require("./db");
 
@@ -22,6 +24,27 @@ const WEBAUTHN_BLOCKED_FEATURES = "WebAuthentication,WebAuthnConditionalUI";
 
 app.commandLine.appendSwitch("disable-features", WEBAUTHN_BLOCKED_FEATURES);
 console.log("[auth] webauthn blocked or bypassed");
+
+function ensureRuntimeEnvFile() {
+  const userDataEnvPath = path.join(app.getPath("userData"), ".env");
+  const repoEnvPath = path.join(app.getAppPath(), ".env");
+  const repoEnvExamplePath = path.join(app.getAppPath(), ".env.example");
+
+  if (!fs.existsSync(userDataEnvPath)) {
+    let source = "";
+    if (fs.existsSync(repoEnvPath)) {
+      source = fs.readFileSync(repoEnvPath, "utf8");
+    } else if (fs.existsSync(repoEnvExamplePath)) {
+      source = fs.readFileSync(repoEnvExamplePath, "utf8");
+    } else {
+      source = "GOOGLE_OAUTH_CLIENT_ID=\n";
+    }
+    fs.writeFileSync(userDataEnvPath, source, "utf8");
+  }
+
+  process.env.AIFLOW_ENV_PATH = userDataEnvPath;
+  dotenv.config({ path: userDataEnvPath, override: false });
+}
 
 function setSafeUserAgentFallback() {
   const chromeVersion = process.versions?.chrome || "124.0.0.0";
@@ -604,6 +627,7 @@ if (!hasSingleInstanceLock) {
 } else {
   app.whenReady().then(async () => {
     setSafeUserAgentFallback();
+    ensureRuntimeEnvFile();
     enforceChromeLikeRequestHeaders(session.defaultSession);
     app.on("session-created", (createdSession) => {
       enforceChromeLikeRequestHeaders(createdSession);

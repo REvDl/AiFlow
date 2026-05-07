@@ -1,6 +1,16 @@
 const path = require("path");
 const { contextBridge, ipcRenderer } = require("electron");
-require("dotenv").config({ path: path.join(__dirname, ".env") });
+const dotenv = require("dotenv");
+
+const envCandidates = [
+  String(process.env.AIFLOW_ENV_PATH || "").trim(),
+  path.join(__dirname, ".env"),
+];
+
+for (const envPath of envCandidates) {
+  if (!envPath) continue;
+  dotenv.config({ path: envPath, override: false });
+}
 
 /**
  * Preload (runs in isolated context).
@@ -14,7 +24,6 @@ contextBridge.exposeInMainWorld("AiFlow", {
     googleOAuthClientId: String(process.env.GOOGLE_OAUTH_CLIENT_ID || "").trim(),
   },
   models: {
-    list: () => ipcRenderer.invoke("models:list"),
     list: () => ipcRenderer.invoke("models:list"),
     add: (payload) => ipcRenderer.invoke("models:add", payload),
     delete: (payload) => ipcRenderer.invoke("models:delete", payload),
