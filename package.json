@@ -34,6 +34,7 @@
       "index.html",
       "styles.css",
       "AiFlow_logo.ico",
+      ".env.defaults",
       ".env.example",
       "package.json"
     ],
