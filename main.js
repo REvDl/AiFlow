@@ -602,6 +602,7 @@ function registerIpcHandlers() {
 }
 
 async function createMainWindow() {
+  const appIconPath = path.join(__dirname, "AiFlow_logo.ico");
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -609,6 +610,7 @@ async function createMainWindow() {
     minHeight: 640,
     backgroundColor: "#0b0f14",
     autoHideMenuBar: true,
+    icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

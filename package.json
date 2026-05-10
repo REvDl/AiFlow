@@ -33,6 +33,7 @@
       "db.js",
       "index.html",
       "styles.css",
+      "AiFlow_logo.ico",
       ".env.example",
       "package.json"
     ],
@@ -40,7 +41,7 @@
       "output": "dist"
     },
     "win": {
-      "signAndEditExecutable": false,
+      "icon": "AiFlow_logo.ico",
       "target": [
         {
           "target": "nsis",
@@ -51,6 +52,9 @@
       ]
     },
     "nsis": {
+      "installerIcon": "AiFlow_logo.ico",
+      "uninstallerIcon": "AiFlow_logo.ico",
+      "installerHeaderIcon": "AiFlow_logo.ico",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }
