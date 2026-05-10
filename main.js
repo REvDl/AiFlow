@@ -27,12 +27,15 @@ console.log("[auth] webauthn blocked or bypassed");
 
 function ensureRuntimeEnvFile() {
   const userDataEnvPath = path.join(app.getPath("userData"), ".env");
+  const repoEnvDefaultsPath = path.join(app.getAppPath(), ".env.defaults");
   const repoEnvPath = path.join(app.getAppPath(), ".env");
   const repoEnvExamplePath = path.join(app.getAppPath(), ".env.example");
 
   if (!fs.existsSync(userDataEnvPath)) {
     let source = "";
-    if (fs.existsSync(repoEnvPath)) {
+    if (fs.existsSync(repoEnvDefaultsPath)) {
+      source = fs.readFileSync(repoEnvDefaultsPath, "utf8");
+    } else if (fs.existsSync(repoEnvPath)) {
       source = fs.readFileSync(repoEnvPath, "utf8");
     } else if (fs.existsSync(repoEnvExamplePath)) {
       source = fs.readFileSync(repoEnvExamplePath, "utf8");
